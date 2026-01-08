@@ -1,12 +1,14 @@
 import sys
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication
+from gui.app_window import AppWindow
+
 
 def main():
     app = QApplication(sys.argv)
-    label = QLabel("UAV Mapper GUI OK")
-    label.resize(300, 100)
-    label.show()
+    w = AppWindow()
+    w.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
