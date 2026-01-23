@@ -1,14 +1,18 @@
-# src/mapping/stitcher.py
 from __future__ import annotations
 
 import cv2
 from typing import Callable, List, Optional
 
-
 ProgressCb = Optional[Callable[[float, str], None]]
 
 
 class SimpleStitcher:
+    """
+    Demo-first stitcher:
+    - SCANS mode default (planar scenes)
+    - Downscale for speed/stability
+    - Filter out frames with too few ORB keypoints to avoid FLANN crashes
+    """
 
     def __init__(
         self,
@@ -24,22 +28,18 @@ class SimpleStitcher:
 
     @staticmethod
     def _downscale_to_megapix(img, mp: float):
-
         if mp <= 0:
             return img
-
         h, w = img.shape[:2]
         cur_mp = (w * h) / 1_000_000.0
         if cur_mp <= mp:
             return img
-
         scale = (mp / cur_mp) ** 0.5
         new_w = max(64, int(w * scale))
         new_h = max(64, int(h * scale))
         return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _count_orb_keypoints(self, img) -> int:
-
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         orb = cv2.ORB_create(nfeatures=self.orb_nfeatures)
         kps = orb.detect(gray, None)
@@ -55,26 +55,26 @@ class SimpleStitcher:
 
         cb(0.05, f"Preparing {len(frames)} frames...")
 
+        # Downscale
         small = [self._downscale_to_megapix(f, self.work_megapix) for f in frames]
 
+        # Filter low-feature frames
         cb(0.15, "Filtering low-feature frames...")
         filtered = []
         kp_counts = []
 
-        for i, img in enumerate(small):
+        for img in small:
             kp = self._count_orb_keypoints(img)
             kp_counts.append(kp)
             if kp >= self.min_keypoints:
                 filtered.append(img)
 
         if len(filtered) < 2:
-
             best = max(kp_counts) if kp_counts else 0
             raise RuntimeError(
-                f"Not enough usable frames for stitching. "
-                f"Frames kept: {len(filtered)}/{len(frames)}. "
-                f"Best keypoints: {best}. "
-                f"Try slower movement, better lighting, less blur, or reduce min_keypoints."
+                f"Not enough usable frames. Kept {len(filtered)}/{len(frames)}. "
+                f"Best keypoints: {best}. Try slower movement / better lighting "
+                f"or reduce min_keypoints."
             )
 
         cb(0.25, f"Kept {len(filtered)}/{len(frames)} frames (>= {self.min_keypoints} keypoints).")
@@ -87,13 +87,12 @@ class SimpleStitcher:
         except Exception:
             pass
 
-        cb(0.35, "Stitching frames (OpenCV Stitcher)...")
+        cb(0.35, "Stitching frames...")
         status, pano = stitcher.stitch(filtered)
 
         if status != cv2.Stitcher_OK:
             raise RuntimeError(
-                f"Stitching failed (status={status}). "
-                f"Try: fewer frames, smaller seconds_step, more overlap, or steadier motion."
+                f"Stitching failed (status={status}). Try fewer frames, more overlap, steadier motion."
             )
 
         cb(1.0, "Stitch complete")

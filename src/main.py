@@ -4,7 +4,6 @@ from gui.app_window import AppWindow
 
 
 def main():
-    print("Running...")
     app = QApplication(sys.argv)
     w = AppWindow()
     w.show()
