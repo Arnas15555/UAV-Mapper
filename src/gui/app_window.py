@@ -11,47 +11,15 @@ from PySide6.QtWidgets import (
     QProgressBar, QMessageBox, QHBoxLayout, QCheckBox, QLineEdit
 )
 
-from mapping.video_extractor import VideoExtractor
-from mapping.stitcher import SimpleStitcher
 from gui.map_view import MapGraphicsView
-
+from utils.pipeline_worker import PipelineWorker
+from utils.pipeline_worker import next_available_path
 
 def cv_to_qpixmap_bgr(mat_bgr: np.ndarray) -> QPixmap:
     h, w = mat_bgr.shape[:2]
     rgb = cv2.cvtColor(mat_bgr, cv2.COLOR_BGR2RGB)
     qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
     return QPixmap.fromImage(qimg)
-
-
-class PipelineWorker(QThread):
-    progress = Signal(float, str)   # value, message
-    finished_ok = Signal(object)    # pano (np.ndarray)
-    finished_err = Signal(str)
-
-    def __init__(self, video_path: str, seconds_step: float, max_frames: int):
-        super().__init__()
-        self.video_path = video_path
-        self.seconds_step = seconds_step
-        self.max_frames = max_frames
-
-    def run(self):
-        try:
-            def cb(p, msg):
-                self.progress.emit(float(p), str(msg))
-
-            self.progress.emit(0.0, "Starting...")
-
-            extractor = VideoExtractor(self.video_path, seconds_step=self.seconds_step, max_frames=self.max_frames)
-            frames = extractor.extract(on_progress=lambda p, m: cb(p * 0.5, m))  # 0–50%
-
-            stitcher = SimpleStitcher(mode="scans", work_megapix=1.5, min_keypoints=120)
-            pano = stitcher.stitch(frames, on_progress=lambda p, m: cb(0.5 + p * 0.5, m))  # 50–100%
-
-            self.finished_ok.emit(pano)
-
-        except Exception as e:
-            self.finished_err.emit(str(e))
-
 
 class AppWindow(QWidget):
     def __init__(self):
@@ -134,8 +102,8 @@ class AppWindow(QWidget):
         self.progress.setValue(0)
         self.status.setText("Processing...")
 
-        seconds_step = 0.25
-        max_frames = 80
+        seconds_step = 0.5
+        max_frames = 30
 
         self.worker = PipelineWorker(self.video_path, seconds_step=seconds_step, max_frames=max_frames)
         self.worker.progress.connect(self.on_progress)
@@ -150,7 +118,8 @@ class AppWindow(QWidget):
     def on_finished_ok(self, pano):
         self.current_pano = pano
 
-        out_path = os.path.join(os.getcwd(), "stitched_map.png")
+        base_out = os.path.join(os.getcwd(), "stitched_map.png")
+        out_path = next_available_path(base_out)
         cv2.imwrite(out_path, pano)
 
         pix = cv_to_qpixmap_bgr(pano)

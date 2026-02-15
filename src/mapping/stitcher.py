@@ -17,7 +17,7 @@ class SimpleStitcher:
     def __init__(
         self,
         mode: str = "scans",
-        work_megapix: float = 1.2,
+        work_megapix: float = 2.0,
         min_keypoints: int = 250,
         orb_nfeatures: int = 2000,
     ):
