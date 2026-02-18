@@ -12,14 +12,15 @@ from PySide6.QtWidgets import (
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox, QFormLayout, QGroupBox
 
 from gui.map_view import MapGraphicsView
-from utils.pipeline_worker import PipelineWorker
-from utils.pipeline_worker import next_available_path
+from utils.pipeline_worker import PipelineWorker, next_available_path
+
 
 def cv_to_qpixmap_bgr(mat_bgr: np.ndarray) -> QPixmap:
     h, w = mat_bgr.shape[:2]
     rgb = cv2.cvtColor(mat_bgr, cv2.COLOR_BGR2RGB)
     qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
     return QPixmap.fromImage(qimg)
+
 
 class AppWindow(QWidget):
     def __init__(self):
@@ -28,12 +29,13 @@ class AppWindow(QWidget):
         self.resize(1280, 820)
 
         self.video_path = ""
-        self.current_pano = None
 
         # Controls
         self.btn_select = QPushButton("Select Video")
+
         self.btn_run = QPushButton("Generate Map")
         self.btn_run.setEnabled(False)
+
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setEnabled(False)
 
@@ -55,7 +57,6 @@ class AppWindow(QWidget):
         # ---- Params (UI) ----
         self.cmb_mode = QComboBox()
         self.cmb_mode.addItems(["scans", "panorama"])
-        self.cmb_mode.setToolTip("OpenCV stitch mode. 'scans' often works better for planar-ish motion.")
 
         self.spin_seconds_step = QDoubleSpinBox()
         self.spin_seconds_step.setRange(0.05, 5.0)
@@ -90,6 +91,11 @@ class AppWindow(QWidget):
         self.spin_extract_megapix.setDecimals(2)
         self.spin_extract_megapix.setValue(2.0)
 
+        self.spin_similar_threshold = QDoubleSpinBox()
+        self.spin_similar_threshold.setRange(1.0, 50.0)
+        self.spin_similar_threshold.setSingleStep(0.5)
+        self.spin_similar_threshold.setDecimals(1)
+        self.spin_similar_threshold.setValue(6.0)
 
         # Viewer
         self.viewer = MapGraphicsView()
@@ -111,11 +117,11 @@ class AppWindow(QWidget):
         params_form.addRow("Mode", self.cmb_mode)
         params_form.addRow("Seconds step", self.spin_seconds_step)
         params_form.addRow("Max frames", self.spin_max_frames)
+        params_form.addRow("Extract MP", self.spin_extract_megapix)
+        params_form.addRow("Similarity thr", self.spin_similar_threshold)
         params_form.addRow("Work MP", self.spin_work_megapix)
         params_form.addRow("Min keypoints", self.spin_min_keypoints)
         params_form.addRow("ORB features", self.spin_orb_nfeatures)
-        params_form.addRow("Extract MP", self.spin_extract_megapix)
-
 
         params_box = QGroupBox("Parameters")
         params_box.setLayout(params_form)
@@ -131,13 +137,21 @@ class AppWindow(QWidget):
         # Signals
         self.btn_select.clicked.connect(self.select_video)
         self.btn_run.clicked.connect(self.run_pipeline)
+        self.btn_cancel.clicked.connect(self.cancel_pipeline)
+
         self.btn_fit.clicked.connect(self.viewer.fit_to_view)
         self.chk_markers.toggled.connect(self.viewer.set_place_markers)
         self.viewer.marker_added.connect(self.on_marker_added)
-        self.btn_cancel.clicked.connect(self.cancel_pipeline)
 
+        self.worker: PipelineWorker | None = None
 
-        self.worker = None
+    def _set_params_enabled(self, enabled: bool):
+        for w in [
+            self.cmb_mode, self.spin_seconds_step, self.spin_max_frames,
+            self.spin_extract_megapix, self.spin_similar_threshold,
+            self.spin_work_megapix, self.spin_min_keypoints, self.spin_orb_nfeatures
+        ]:
+            w.setEnabled(bool(enabled))
 
     def select_video(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -155,10 +169,9 @@ class AppWindow(QWidget):
 
     def cancel_pipeline(self):
         if self.worker and self.worker.isRunning():
-            self.status.setText("Cancelling...")
+            self.status.setText("Cancelling map generation...")
             self.worker.requestInterruption()
             self.btn_cancel.setEnabled(False)
-
 
     def run_pipeline(self):
         if not self.video_path:
@@ -166,22 +179,20 @@ class AppWindow(QWidget):
 
         self.btn_run.setEnabled(False)
         self.btn_select.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self._set_params_enabled(False)
+
         self.progress.setValue(0)
         self.status.setText("Processing...")
-        for w in [self.cmb_mode, self.spin_seconds_step, self.spin_max_frames,
-                  self.spin_work_megapix, self.spin_min_keypoints, self.spin_orb_nfeatures,
-                  self.spin_extract_megapix]:
-            w.setEnabled(False)
-
 
         seconds_step = float(self.spin_seconds_step.value())
         max_frames = int(self.spin_max_frames.value())
-
         mode = self.cmb_mode.currentText().strip().lower()
         work_megapix = float(self.spin_work_megapix.value())
         min_keypoints = int(self.spin_min_keypoints.value())
         orb_nfeatures = int(self.spin_orb_nfeatures.value())
         extract_megapix = float(self.spin_extract_megapix.value())
+        similar_threshold = float(self.spin_similar_threshold.value())
 
         self.worker = PipelineWorker(
             self.video_path,
@@ -192,15 +203,15 @@ class AppWindow(QWidget):
             min_keypoints=min_keypoints,
             orb_nfeatures=orb_nfeatures,
             extract_megapix=extract_megapix,
+            similar_threshold=similar_threshold,
         )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_finished_ok)
         self.worker.finished_err.connect(self.on_finished_err)
         self.worker.start()
-        self.btn_cancel.setEnabled(True)
 
     def on_progress(self, p: float, msg: str):
-        self.progress.setValue(int(p * 100))
+        self.progress.setValue(int(max(0.0, min(1.0, p)) * 100))
         self.status.setText(msg)
 
     def on_finished_ok(self, pano):
@@ -208,6 +219,7 @@ class AppWindow(QWidget):
         out_path = next_available_path(base_out)
         cv2.imwrite(out_path, pano)
 
+        # Display a scaled preview to save RAM
         preview = pano
         max_preview_w = 1920
         h, w = preview.shape[:2]
@@ -217,12 +229,10 @@ class AppWindow(QWidget):
 
         pix = cv_to_qpixmap_bgr(preview)
         self.viewer.set_map_pixmap(pix)
-        self.current_pano = None
 
         self.status.setText(f"Done. Saved: {out_path}")
         self.progress.setValue(100)
 
-        # Enable viewer tools
         self.btn_fit.setEnabled(True)
         self.chk_markers.setEnabled(True)
         self.marker_label.setEnabled(True)
@@ -230,26 +240,19 @@ class AppWindow(QWidget):
         self.btn_run.setEnabled(True)
         self.btn_select.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-
-        for w in [self.cmb_mode, self.spin_seconds_step, self.spin_max_frames,
-                  self.spin_work_megapix, self.spin_min_keypoints, self.spin_orb_nfeatures,
-                  self.spin_extract_megapix]:
-            w.setEnabled(True)
-
-
+        self._set_params_enabled(True)
 
     def on_finished_err(self, err: str):
-        QMessageBox.critical(self, "Error", err)
-        self.status.setText("Failed.")
-        self.btn_run.setEnabled(True)
+        if "Cancelled" in err:
+            self.status.setText("Generation cancelled.")
+        else:
+            QMessageBox.critical(self, "Error", err)
+            self.status.setText("Failed.")
+
+        self.btn_run.setEnabled(bool(self.video_path))
         self.btn_select.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        for w in [self.cmb_mode, self.spin_seconds_step, self.spin_max_frames,
-                  self.spin_work_megapix, self.spin_min_keypoints, self.spin_orb_nfeatures,
-                  self.spin_extract_megapix]:
-            w.setEnabled(True)
-
-
+        self._set_params_enabled(True)
 
     def on_marker_added(self, x: float, y: float):
         label = self.marker_label.text().strip()
