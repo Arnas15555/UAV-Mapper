@@ -35,7 +35,6 @@ Stitch drone video footage into a single overhead map using OpenCV and PySide6.
 ## Setup — CUDA (NVIDIA GPU, recommended for best performance)
 
 This requires building OpenCV from source. Do this once on your CUDA-capable machine.
-cuDNN is not required — CUDA alone is sufficient for the GPU acceleration used by this project.
 
 ### Prerequisites
 - [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (13.x recommended)
@@ -107,7 +106,7 @@ Check your GPU at: https://developer.nvidia.com/cuda-gpus
 4. The stitched map is saved automatically as `stitched_map.png` in the working directory
 5. Use **Save As** to save to a custom location
 
-### Recommended settings for 4K 25fps shaky drone footage
+### Recommended settings for 4K 25fps drone footage
 
 | Parameter         | Value |
 |-------------------|-------|
