@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from typing import Callable, List, Optional, Tuple
 
+from utils.config import DEFAULTS
+
 ProgressCb = Optional[Callable[[float, str], None]]
 
 
@@ -20,14 +22,15 @@ class SimpleStitcher:
     - Motion heuristic from median displacement of inlier correspondences (robust)
     - KNN matching + Lowe ratio test (more robust than BF crossCheck)
     - Cancel checks inside long loops
+    - Duplicate-frame guard in greedy selection
     """
 
     def __init__(
         self,
-        mode: str = "scans",
-        work_megapix: float = 2.0,
-        min_keypoints: int = 250,
-        orb_nfeatures: int = 2000,
+        mode: str = DEFAULTS["stitch_mode"],
+        work_megapix: float = DEFAULTS["work_megapix"],
+        min_keypoints: int = DEFAULTS["min_keypoints"],
+        orb_nfeatures: int = DEFAULTS["orb_nfeatures"],
         lookahead: int = 6,
         min_inliers: int = 30,
         min_motion_px: float = 8.0,
@@ -81,10 +84,7 @@ class SimpleStitcher:
     def _match_knn_ratio(
         self, des_a: np.ndarray, des_b: np.ndarray
     ) -> List[cv2.DMatch]:
-        """
-        Returns list of good matches using KNN + Lowe ratio test.
-        """
-        # knnMatch returns list of lists
+        """KNN + Lowe ratio test. Returns best matches sorted by distance."""
         knn = self._bf.knnMatch(des_a, des_b, k=2)
         good: List[cv2.DMatch] = []
         for pair in knn:
@@ -94,7 +94,6 @@ class SimpleStitcher:
             if m.distance < self.ratio_thresh * n.distance:
                 good.append(m)
 
-        # Keep best few
         good.sort(key=lambda m: m.distance)
         if len(good) > self.max_match_keep:
             good = good[: self.max_match_keep]
@@ -109,9 +108,7 @@ class SimpleStitcher:
     ) -> Tuple[int, float]:
         """
         Returns (inliers_count, median_inlier_displacement_px).
-
-        If cannot estimate:
-          returns (0, 0.0)
+        Returns (0, 0.0) if quality cannot be estimated.
         """
         if des_a is None or des_b is None:
             return 0, 0.0
@@ -136,7 +133,7 @@ class SimpleStitcher:
         if inliers < 4:
             return inliers, 0.0
 
-        # Median displacement of inlier correspondences (robust)
+        # Median displacement of inlier correspondences (robust to outliers)
         da = pts_a[mask]
         db = pts_b[mask]
         disp = np.linalg.norm(db - da, axis=1)
@@ -149,10 +146,7 @@ class SimpleStitcher:
         Balanced score:
         - primary: maximize inliers
         - secondary: prefer motion near target_motion_px
-        - reject too-small motion elsewhere
         """
-        # penalty for being away from target motion
-        # normalized penalty so motion_weight makes sense
         motion_penalty = self.motion_weight * abs(motion - self.target_motion_px)
         return float(inliers) - float(motion_penalty)
 
@@ -190,7 +184,9 @@ class SimpleStitcher:
 
         cb(0.22, f"Usable frames: {len(usable)}/{n} (>= {self.min_keypoints} keypoints)")
 
-        selected_idxs = [usable[0]]
+        selected_idxs: List[int] = [usable[0]]
+        # Track selected set for fast duplicate checking
+        selected_set: set[int] = {usable[0]}
         cur_pos = 0
 
         # Greedy selection with lookahead
@@ -209,8 +205,12 @@ class SimpleStitcher:
                     cancel_check()
 
                 cand_idx = usable[next_pos]
-                kps_b, des_b = feats[cand_idx]
 
+                # Skip already-selected frames to avoid duplicates
+                if cand_idx in selected_set:
+                    continue
+
+                kps_b, des_b = feats[cand_idx]
                 inliers, motion = self._pair_quality(kps_a, des_a, kps_b, des_b)
 
                 if inliers < self.min_inliers:
@@ -224,12 +224,19 @@ class SimpleStitcher:
                     best = (score, inliers, motion, next_pos, cand_idx)
 
             if best is None:
-                # Fallback: move one step to avoid stalls
-                cur_pos += 1
-                selected_idxs.append(usable[cur_pos])
+                # Fallback: advance one step; find the next usable frame not yet selected
+                next_pos = cur_pos + 1
+                while next_pos < len(usable) and usable[next_pos] in selected_set:
+                    next_pos += 1
+                if next_pos >= len(usable):
+                    break
+                cur_pos = next_pos
+                chosen_idx = usable[cur_pos]
             else:
                 _, _, _, cur_pos, chosen_idx = best
-                selected_idxs.append(chosen_idx)
+
+            selected_idxs.append(chosen_idx)
+            selected_set.add(chosen_idx)
 
             cb(
                 0.22 + 0.58 * (len(selected_idxs) / max(2, min(self.max_frames_for_stitch, len(usable)))),
@@ -250,10 +257,15 @@ class SimpleStitcher:
 
         cb(0.02, f"Preparing {len(frames)} frames...")
 
+        # Downscale into a separate list — avoids doubling RAM by not modifying originals
         frames_small = [self._downscale_to_megapix(f, self.work_megapix) for f in frames]
         cb(0.08, "Downscaled frames")
 
         selected = self._select_frames(frames_small, on_progress=on_progress, cancel_check=cancel_check)
+
+        # Free the full downscaled list as soon as selection is done
+        del frames_small
+
         if len(selected) < 2:
             raise RuntimeError("Frame selection produced <2 frames. Try different settings.")
 
@@ -270,6 +282,9 @@ class SimpleStitcher:
 
         cb(0.85, "Stitching selected frames...")
         status, pano = stitcher.stitch(selected)
+
+        # Free selected frames immediately after stitching
+        del selected
 
         if status != cv2.Stitcher_OK:
             raise RuntimeError(

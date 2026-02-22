@@ -1,3 +1,11 @@
-opencv-python
-numpy
+# Core dependencies
+# NOTE: Do NOT install opencv-python via pip if you have built OpenCV from source
+# with CUDA support. The custom-built cv2.pyd should be placed directly in your
+# venv's site-packages instead (see README.md).
+#
+# If you are running on a machine WITHOUT a CUDA-capable GPU (e.g. a laptop with
+# integrated graphics only), uncomment the line below and skip the source build:
+# opencv-python==4.10.0.84
+
+numpy<2
 PySide6

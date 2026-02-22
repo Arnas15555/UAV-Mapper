@@ -4,6 +4,7 @@ import os
 from typing import Optional
 
 import cv2
+import numpy as np
 from PySide6.QtCore import QThread, Signal
 
 from mapping.video_extractor import VideoExtractor
@@ -13,13 +14,17 @@ from mapping.postprocess import crop_black, crop_largest_inner_rect
 
 def next_available_path(base_path: str) -> str:
     """
-    If base_path exists, returns base1, base2, ...
-    Example: stitched_map.png -> stitched_map1.png -> stitched_map2.png
+    Returns base_path if it doesn't exist, otherwise base_path with an
+    incrementing suffix:  stitched_map.png → stitched_map1.png → stitched_map2.png
+
+    Note: There is an inherent TOCTOU window between checking existence and
+    writing.  For a single-user desktop app this is acceptable; the write call
+    in SaveWorker is wrapped in a try/except as an additional safety net.
     """
     if not os.path.exists(base_path):
         return base_path
 
-    folder = os.path.dirname(base_path)
+    folder = os.path.dirname(base_path) or "."
     name = os.path.basename(base_path)
     stem, ext = os.path.splitext(name)
 
@@ -31,10 +36,40 @@ def next_available_path(base_path: str) -> str:
         i += 1
 
 
+class SaveWorker(QThread):
+    """
+    Saves a numpy array (BGR image) to disk on a background thread so the
+    main thread — and therefore the UI — is not blocked by a large imwrite.
+    """
+
+    save_ok = Signal(str)   # path that was written
+    save_err = Signal(str)  # error message
+
+    def __init__(self, pano: np.ndarray, base_path: str, parent=None):
+        super().__init__(parent)
+        # Keep our own reference; the caller may release theirs
+        self._pano = pano.copy()
+        self._base_path = base_path
+
+    def run(self):
+        try:
+            out_path = next_available_path(self._base_path)
+            ok = cv2.imwrite(out_path, self._pano)
+            if not ok:
+                self.save_err.emit(f"cv2.imwrite returned False for path: {out_path}")
+                return
+            self.save_ok.emit(out_path)
+        except Exception as e:
+            self.save_err.emit(f"{e.__class__.__name__}: {e}")
+        finally:
+            # Release the copy regardless of outcome
+            self._pano = None
+
+
 class PipelineWorker(QThread):
-    progress = Signal(float, str)   # value 0..1, message
-    finished_ok = Signal(object)    # pano (np.ndarray)
-    finished_err = Signal(str)      # error message
+    progress    = Signal(float, str)   # value 0..1, message
+    finished_ok = Signal(object)       # pano (np.ndarray)
+    finished_err = Signal(str)         # error message
 
     def __init__(
         self,
@@ -71,8 +106,7 @@ class PipelineWorker(QThread):
 
         try:
             def cb(p: float, msg: str):
-                # clamp p for safety
-                p = 0.0 if p < 0.0 else (1.0 if p > 1.0 else float(p))
+                p = max(0.0, min(1.0, float(p)))
                 self.progress.emit(p, str(msg))
 
             cb(0.0, "Starting...")
@@ -101,6 +135,7 @@ class PipelineWorker(QThread):
                 cancel_check=self._check_cancel,
             )
 
+            # Release frames as soon as stitching is done
             frames = None
             self._check_cancel()
 
@@ -117,7 +152,6 @@ class PipelineWorker(QThread):
             pano = None
 
             msg = str(e).strip() or e.__class__.__name__
-            # Include type for debugging without dumping a full traceback into the UI
             if e.__class__.__name__ not in msg:
                 msg = f"{e.__class__.__name__}: {msg}"
 

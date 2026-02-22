@@ -6,6 +6,8 @@ from typing import Callable, Optional, List
 import cv2
 import numpy as np
 
+from utils.config import DEFAULTS
+
 
 class VideoExtractor:
     """
@@ -19,10 +21,10 @@ class VideoExtractor:
     def __init__(
         self,
         video_path: str,
-        seconds_step: float = 0.15,
-        max_frames: int = 120,
-        extract_megapix: float = 2.0,
-        similar_threshold: float = 6.0,
+        seconds_step: float = DEFAULTS["seconds_step"],
+        max_frames: int = DEFAULTS["max_frames"],
+        extract_megapix: float = DEFAULTS["extract_megapix"],
+        similar_threshold: float = DEFAULTS["similar_threshold"],
         similar_resize: tuple[int, int] = (320, 180),
         similar_blur: bool = True,
         cancel_check: Optional[Callable[[], None]] = None,
@@ -87,6 +89,8 @@ class VideoExtractor:
             frames: List[np.ndarray] = []
             last_kept: Optional[np.ndarray] = None
             t = 0.0
+            read_errors = 0
+            max_consecutive_errors = 10  # distinguish corrupt video from clean end
 
             while True:
                 if self.cancel_check:
@@ -97,8 +101,23 @@ class VideoExtractor:
 
                 cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
                 ok, frame = cap.read()
+
                 if not ok or frame is None:
-                    break
+                    read_errors += 1
+                    if read_errors >= max_consecutive_errors:
+                        # Likely a corrupted video or unexpected EOF mid-stream
+                        if not frames:
+                            raise RuntimeError(
+                                f"Video read failed after {read_errors} consecutive errors "
+                                f"at t={t:.2f}s. The file may be corrupted."
+                            )
+                        # Partial success — warn but continue with what we have
+                        break
+                    t += self.seconds_step
+                    continue
+
+                # Reset error counter on successful read
+                read_errors = 0
 
                 frame = self._downscale_to_megapix(frame, self.extract_megapix)
 

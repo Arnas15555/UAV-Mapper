@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
@@ -21,14 +22,15 @@ class MapMarker:
 class MapGraphicsView(QGraphicsView):
     """
     Zoom/pan capable map viewer based on QGraphicsView.
-    - Wheel zoom toward cursor (stable)
+
+    - Wheel zoom toward cursor (stable anchor)
     - Pan with Left-drag (when not placing markers) or Middle-drag
-    - Optional marker placement
-    - Double-click to fit
-    - Right-click to remove nearest marker (optional, within radius)
+    - Optional marker placement on left-click
+    - Double-click to fit the map to the viewport
+    - Right-click to remove nearest marker within a pixel radius
     """
 
-    marker_added = Signal(float, float)  # scene coords (x, y)
+    marker_added   = Signal(float, float)  # scene coords (x, y)
     marker_removed = Signal(float, float)  # scene coords (x, y) of removed marker
 
     def __init__(self, parent=None):
@@ -39,7 +41,7 @@ class MapGraphicsView(QGraphicsView):
 
         self._pixmap_item: Optional[QGraphicsPixmapItem] = None
 
-        # Rendering hints (pixmap smoothing helps at odd zoom levels)
+        # Smooth pixmap rendering helps at non-integer zoom levels
         self.setRenderHints(
             self.renderHints()
             | QPainter.RenderHint.SmoothPixmapTransform
@@ -56,14 +58,14 @@ class MapGraphicsView(QGraphicsView):
         self._zoom_step = 1.25
         self._min_scale = 0.05
         self._max_scale = 40.0
-        self._scale_factor = 1.0  # track actual scale for clamping
+        self._scale_factor = 1.0  # tracks current uniform scale for clamping
 
         # Markers
         self._markers: List[MapMarker] = []
         self._marker_items: List[Tuple[QGraphicsEllipseItem, Optional[QGraphicsSimpleTextItem]]] = []
         self._remove_radius_px = 18.0
 
-        # Behavior
+        # Anchoring / drag config
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -100,13 +102,14 @@ class MapGraphicsView(QGraphicsView):
         if not self._pixmap_item:
             return
         self.resetTransform()
-        self._scale_factor = 1.0
         self.fitInView(self._pixmap_item.boundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-        # After fitInView scale_factor is no longer 1.0 in reality
-        # so estimate it by checking the current transform
+        # fitInView modifies the transform internally without going through
+        # _zoom_at, so we re-derive _scale_factor from the resulting matrix.
+        # Using the geometric mean of m11/m22 handles any residual non-uniform
+        # scaling more robustly than reading m11 alone.
         t = self.transform()
-        self._scale_factor = float(t.m11())
+        self._scale_factor = float(math.sqrt(t.m11() * t.m22()))
 
     def set_place_markers(self, enabled: bool):
         self._place_markers = bool(enabled)
@@ -126,6 +129,7 @@ class MapGraphicsView(QGraphicsView):
         dot.setBrush(QBrush(Qt.GlobalColor.transparent))
         dot.setPos(QPointF(x, y))
         dot.setZValue(10)
+        # Keep marker size constant in screen-space regardless of zoom level
         dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         self._scene.addItem(dot)
 
@@ -161,21 +165,17 @@ class MapGraphicsView(QGraphicsView):
         event.accept()
 
     def _try_remove_nearest_marker(self, scene_pos: QPointF) -> bool:
-        """
-        Removes nearest marker if within a small radius
-        """
+        """Removes nearest marker if it is within _remove_radius_px screen pixels."""
         if not self._marker_items:
             return False
 
-        # find nearest in scene coords
         best_i = -1
         best_d2 = 1e18
         sx, sy = scene_pos.x(), scene_pos.y()
 
-        for i, (dot, text) in enumerate(self._marker_items):
+        for i, (dot, _) in enumerate(self._marker_items):
             p = dot.pos()
-            dx = p.x() - sx
-            dy = p.y() - sy
+            dx, dy = p.x() - sx, p.y() - sy
             d2 = dx * dx + dy * dy
             if d2 < best_d2:
                 best_d2 = d2
@@ -185,10 +185,10 @@ class MapGraphicsView(QGraphicsView):
             return False
 
         dot, text = self._marker_items[best_i]
-        dot_view = self.mapFromScene(dot.pos())
+        dot_view   = self.mapFromScene(dot.pos())
         click_view = self.mapFromScene(scene_pos)
         dv = dot_view - click_view
-        dist = (dv.x() ** 2 + dv.y() ** 2) ** 0.5
+        dist = math.sqrt(dv.x() ** 2 + dv.y() ** 2)
 
         if dist > self._remove_radius_px:
             return False
@@ -217,12 +217,10 @@ class MapGraphicsView(QGraphicsView):
         if abs(factor - 1.0) < 1e-6:
             return
 
-        # keep the scene point under cursor fixed in view.
+        # Keep the scene point under the cursor fixed in the viewport
         old_scene = self.mapToScene(view_pos)
-
         self.scale(factor, factor)
         self._scale_factor = new_scale
-
         new_scene = self.mapToScene(view_pos)
         delta = new_scene - old_scene
 
@@ -239,8 +237,7 @@ class MapGraphicsView(QGraphicsView):
         if delta == 0:
             return
 
-        zoom_in = delta > 0
-        factor = self._zoom_step if zoom_in else (1.0 / self._zoom_step)
+        factor = self._zoom_step if delta > 0 else (1.0 / self._zoom_step)
         self._zoom_at(event.position().toPoint(), factor)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
@@ -255,21 +252,18 @@ class MapGraphicsView(QGraphicsView):
             super().mousePressEvent(event)
             return
 
-        # Marker placing
         if event.button() == Qt.MouseButton.LeftButton and self._place_markers:
             scene_pos = self.mapToScene(event.pos())
             self.marker_added.emit(scene_pos.x(), scene_pos.y())
             event.accept()
             return
 
-        # Right-click: remove nearest marker
         if event.button() == Qt.MouseButton.RightButton:
             scene_pos = self.mapToScene(event.pos())
             if self._try_remove_nearest_marker(scene_pos):
                 event.accept()
                 return
 
-        # Pan with middle mouse always, or left mouse when not placing markers
         if event.button() == Qt.MouseButton.MiddleButton:
             self._start_pan(event)
             return
@@ -287,7 +281,7 @@ class MapGraphicsView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if (event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton)) and self._panning:
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton) and self._panning:
             self._end_pan(event)
             return
         super().mouseReleaseEvent(event)

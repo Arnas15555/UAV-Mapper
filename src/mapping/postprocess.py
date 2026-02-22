@@ -3,6 +3,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+# Minimum output dimensions — prevents returning a near-empty image on
+# degenerate inputs (e.g. all-black panorama edges after heavy erosion).
+_MIN_OUTPUT_DIM = 32
+
 
 def _valid_mask(pano_bgr: np.ndarray, thresh: int = 1) -> np.ndarray:
     """
@@ -43,8 +47,9 @@ def auto_rotate(
 ) -> np.ndarray:
     """
     Attempts to deskew panorama using dominant Hough line angles.
-    - Using angle filtering
+    - Uses angle filtering to keep near-horizontal lines only
     - Clamps rotation to max_abs_angle_deg
+    - Returns the original image unchanged if no correction is needed
     """
     gray = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, canny1, canny2)
@@ -55,9 +60,7 @@ def auto_rotate(
 
     angles = []
     for rho, theta in lines[:, 0, :]:
-        # Convert to degrees around horizontal baseline
         ang = (theta - np.pi / 2) * 180.0 / np.pi
-        # Keep near-horizontal lines only
         if abs(ang) <= max_abs_angle_deg:
             angles.append(ang)
 
@@ -88,7 +91,13 @@ def crop_largest_inner_rect(
     kernel_scale: float = 0.01,
     use_rotated_rect: bool = False,
 ) -> np.ndarray:
+    """
+    Crops to the largest inner rectangle of valid (non-black) content.
 
+    Falls back to crop_black() when:
+    - erosion removes all content, OR
+    - the resulting crop would be smaller than _MIN_OUTPUT_DIM in either dimension
+    """
     mask = _valid_mask(pano_bgr, thresh=thresh)
     if cv2.countNonZero(mask) == 0:
         return pano_bgr
@@ -113,7 +122,7 @@ def crop_largest_inner_rect(
 
     contours, _ = cv2.findContours(mask2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        # Too aggressive erosion. Fall back to non-eroded bbox crop.
+        # Erosion was too aggressive — fall back to simple bbox crop
         return crop_black(pano_bgr, thresh=thresh)
 
     c = max(contours, key=cv2.contourArea)
@@ -121,16 +130,18 @@ def crop_largest_inner_rect(
     if use_rotated_rect:
         rect = cv2.minAreaRect(c)
         box = cv2.boxPoints(rect).astype(np.int32)
-
-        # Get axis-aligned bounding box of the rotated rectangle
         x, y, ww, hh = cv2.boundingRect(box)
-        x = max(0, x)
-        y = max(0, y)
-        ww = min(w - x, ww)
-        hh = min(h - y, hh)
-        return pano_bgr[y : y + hh, x : x + ww]
+    else:
+        x, y, ww, hh = cv2.boundingRect(c)
 
-    # Default: axis-aligned bounding rect
-    x, y, ww, hh = cv2.boundingRect(c)
+    # Clamp to image bounds
+    x = max(0, x)
+    y = max(0, y)
+    ww = min(w - x, ww)
+    hh = min(h - y, hh)
+
+    # Guard against degenerate crops (e.g. all-black panorama with thin valid strip)
+    if ww < _MIN_OUTPUT_DIM or hh < _MIN_OUTPUT_DIM:
+        return crop_black(pano_bgr, thresh=thresh)
+
     return pano_bgr[y : y + hh, x : x + ww]
-
