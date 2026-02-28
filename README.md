@@ -66,29 +66,39 @@ cuDNN is not required — CUDA alone is sufficient for the GPU acceleration used
 
 4. Build (takes 1-3 hours):
    ```
-   cmake --build . --config Release --jobs 8
+   cmake --build C:\opencv-build\build --config Release --parallel 8
    ```
 
-5. Copy the built `.pyd` into your venv:
+5. Install to a clean location:
+   ```
+   cmake --install C:\opencv-build\build --config Release --prefix C:\opencv
+   ```
+
+6. Add OpenCV to your system PATH (run PowerShell as administrator, then restart your terminal):
+   ```
+   [System.Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";C:\opencv\x64\vc17\bin", "Machine")
+   ```
+
+7. Copy the built `.pyd` into your venv:
    ```
    copy C:\opencv-build\build\lib\python3\Release\cv2.cp310-win_amd64.pyd ".venv\Lib\site-packages\cv2\"
    ```
 
-6. Install remaining dependencies:
+8. Install remaining dependencies:
    ```
    pip install "numpy<2" PySide6
    ```
 
-7. Verify CUDA is working:
+9. Verify CUDA is working:
    ```python
    import cv2
    print(cv2.cuda.getCudaEnabledDeviceCount())  # should print 1
    ```
 
-8. Run:
-   ```
-   python src/main.py
-   ```
+10. Run:
+    ```
+    python src/main.py
+    ```
 
 ### CUDA compute capability by GPU
 - RTX 2070 Super: 7.5
@@ -107,7 +117,7 @@ Check your GPU at: https://developer.nvidia.com/cuda-gpus
 4. The stitched map is saved automatically as `stitched_map.png` in the working directory
 5. Use **Save As** to save to a custom location
 
-### Recommended settings for 4K 25fps shaky drone footage
+### Recommended settings for 4K 25fps drone footage
 
 | Parameter         | Value |
 |-------------------|-------|
