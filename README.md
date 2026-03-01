@@ -35,7 +35,6 @@ Stitch drone video footage into a single overhead map using OpenCV and PySide6.
 ## Setup — CUDA (NVIDIA GPU, recommended for best performance)
 
 This requires building OpenCV from source. Do this once on your CUDA-capable machine.
-cuDNN is not required — CUDA alone is sufficient for the GPU acceleration used by this project.
 
 ### Prerequisites
 - [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (13.x recommended)
