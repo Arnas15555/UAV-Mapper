@@ -9,17 +9,13 @@ from PySide6.QtCore import QThread, Signal
 
 from mapping.video_extractor import VideoExtractor
 from mapping.stitcher import SimpleStitcher
-from mapping.postprocess import crop_black, crop_largest_inner_rect
+from mapping.postprocess import crop_black, crop_largest_inner_rect, auto_rotate
 
 
 def next_available_path(base_path: str) -> str:
     """
     Returns base_path if it doesn't exist, otherwise base_path with an
     incrementing suffix:  stitched_map.png → stitched_map1.png → stitched_map2.png
-
-    Note: There is an inherent TOCTOU window between checking existence and
-    writing.  For a single-user desktop app this is acceptable; the write call
-    in SaveWorker is wrapped in a try/except as an additional safety net.
     """
     if not os.path.exists(base_path):
         return base_path
@@ -42,12 +38,11 @@ class SaveWorker(QThread):
     main thread — and therefore the UI — is not blocked by a large imwrite.
     """
 
-    save_ok = Signal(str)   # path that was written
-    save_err = Signal(str)  # error message
+    save_ok  = Signal(str)   # path that was written
+    save_err = Signal(str)   # error message
 
     def __init__(self, pano: np.ndarray, base_path: str, parent=None):
         super().__init__(parent)
-        # Keep our own reference; the caller may release theirs
         self._pano = pano.copy()
         self._base_path = base_path
 
@@ -62,39 +57,42 @@ class SaveWorker(QThread):
         except Exception as e:
             self.save_err.emit(f"{e.__class__.__name__}: {e}")
         finally:
-            # Release the copy regardless of outcome
             self._pano = None
 
 
 class PipelineWorker(QThread):
-    progress    = Signal(float, str)   # value 0..1, message
-    finished_ok = Signal(object)       # pano (np.ndarray)
-    finished_err = Signal(str)         # error message
+    progress     = Signal(float, str)   # value 0..1, message
+    finished_ok  = Signal(object)       # pano (np.ndarray)
+    finished_err = Signal(str)          # error message
 
     def __init__(
         self,
         video_path: str,
         seconds_step: float,
         max_frames: int,
-        stitch_mode: str = "scans",
-        work_megapix: float = 1.5,
-        min_keypoints: int = 120,
-        orb_nfeatures: int = 2000,
+        stitch_mode: str = "panorama",       # FIX: panorama mode suits UAV footage better
+        work_megapix: float = 2.0,
+        min_keypoints: int = 100,
+        orb_nfeatures: int = 4000,
         extract_megapix: float = 2.0,
-        similar_threshold: float = 6.0,
+        similar_threshold: float = 8.0,
+        min_motion_px: float = 3.0,          # FIX: was 8.0 — too strict for slow UAV
+        target_motion_px: float = 20.0,      # FIX: was 40.0 — more realistic for UAV
+        max_frames_for_stitch: int = 120,    # FIX: was hard-coded 60
     ):
         super().__init__()
-        self.video_path = str(video_path)
-        self.seconds_step = float(seconds_step)
-        self.max_frames = int(max_frames)
-
-        self.stitch_mode = str(stitch_mode)
-        self.work_megapix = float(work_megapix)
-        self.min_keypoints = int(min_keypoints)
-        self.orb_nfeatures = int(orb_nfeatures)
-
-        self.extract_megapix = float(extract_megapix)
+        self.video_path        = str(video_path)
+        self.seconds_step      = float(seconds_step)
+        self.max_frames        = int(max_frames)
+        self.stitch_mode       = str(stitch_mode)
+        self.work_megapix      = float(work_megapix)
+        self.min_keypoints     = int(min_keypoints)
+        self.orb_nfeatures     = int(orb_nfeatures)
+        self.extract_megapix   = float(extract_megapix)
         self.similar_threshold = float(similar_threshold)
+        self.min_motion_px     = float(min_motion_px)
+        self.target_motion_px  = float(target_motion_px)
+        self.max_frames_for_stitch = int(max_frames_for_stitch)
 
     def _check_cancel(self):
         if self.isInterruptionRequested():
@@ -120,7 +118,7 @@ class PipelineWorker(QThread):
                 similar_threshold=self.similar_threshold,
                 cancel_check=self._check_cancel,
             )
-            frames = extractor.extract(on_progress=lambda p, m: cb(p * 0.50, m))
+            frames = extractor.extract(on_progress=lambda p, m: cb(p * 0.45, m))
             self._check_cancel()
 
             stitcher = SimpleStitcher(
@@ -128,19 +126,28 @@ class PipelineWorker(QThread):
                 work_megapix=self.work_megapix,
                 min_keypoints=self.min_keypoints,
                 orb_nfeatures=self.orb_nfeatures,
+                min_motion_px=self.min_motion_px,
+                target_motion_px=self.target_motion_px,
+                max_frames_for_stitch=self.max_frames_for_stitch,
             )
             pano = stitcher.stitch(
                 frames,
-                on_progress=lambda p, m: cb(0.50 + p * 0.45, m),
+                on_progress=lambda p, m: cb(0.45 + p * 0.45, m),
                 cancel_check=self._check_cancel,
             )
 
-            # Release frames as soon as stitching is done
             frames = None
             self._check_cancel()
 
-            cb(0.95, "Post-processing map...")
+            cb(0.92, "Post-processing map...")
             pano = crop_black(pano)
+
+            # FIX: auto_rotate was defined in postprocess.py but never called.
+            # Corrects the ~45° tilt that accumulates from homography chaining.
+            cb(0.95, "Auto-rotating map...")
+            pano = auto_rotate(pano)
+
+            cb(0.97, "Cropping to content...")
             pano = crop_largest_inner_rect(pano, shrink_iters=3)
 
             self._check_cancel()
@@ -149,7 +156,7 @@ class PipelineWorker(QThread):
 
         except Exception as e:
             frames = None
-            pano = None
+            pano   = None
 
             msg = str(e).strip() or e.__class__.__name__
             if e.__class__.__name__ not in msg:
