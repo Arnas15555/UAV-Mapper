@@ -77,7 +77,7 @@ def auto_rotate(
         pano_bgr,
         M,
         (w, h),
-        flags=cv2.INTER_LINEAR,
+        flags=cv2.INTER_LANCZOS4,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=(0, 0, 0),
     )
@@ -134,7 +134,6 @@ def crop_largest_inner_rect(
     else:
         x, y, ww, hh = cv2.boundingRect(c)
 
-    # Clamp to image bounds
     x = max(0, x)
     y = max(0, y)
     ww = min(w - x, ww)

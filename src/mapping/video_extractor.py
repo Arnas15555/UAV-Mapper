@@ -25,6 +25,7 @@ class VideoExtractor:
         max_frames: int = DEFAULTS["max_frames"],
         extract_megapix: float = DEFAULTS["extract_megapix"],
         similar_threshold: float = DEFAULTS["similar_threshold"],
+        blur_threshold: float = DEFAULTS["blur_threshold"],
         similar_resize: tuple[int, int] = (320, 180),
         similar_blur: bool = True,
         cancel_check: Optional[Callable[[], None]] = None,
@@ -35,6 +36,7 @@ class VideoExtractor:
         self.extract_megapix = float(extract_megapix)
 
         self.similar_threshold = float(similar_threshold)
+        self.blur_threshold = float(blur_threshold)
         self.similar_resize = similar_resize
         self.similar_blur = bool(similar_blur)
 
@@ -52,6 +54,14 @@ class VideoExtractor:
         new_w = max(64, int(w * scale))
         new_h = max(64, int(h * scale))
         return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    def _is_blurry(self, frame_bgr: np.ndarray) -> bool:
+        """
+        Rejects frames where the Laplacian variance falls below blur_threshold.
+        Low variance means few strong edges — a reliable indicator of motion blur.
+        """
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < self.blur_threshold
 
     def _prep_similarity_gray(self, bgr: np.ndarray) -> np.ndarray:
         g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -88,6 +98,7 @@ class VideoExtractor:
 
             frames: List[np.ndarray] = []
             last_kept: Optional[np.ndarray] = None
+            last_kept_gray: Optional[np.ndarray] = None  # cached preprocessed gray
             t = 0.0
             read_errors = 0
             max_consecutive_errors = 10  # distinguish corrupt video from clean end
@@ -116,14 +127,24 @@ class VideoExtractor:
                     t += self.seconds_step
                     continue
 
-                # Reset error counter on successful read
                 read_errors = 0
 
                 frame = self._downscale_to_megapix(frame, self.extract_megapix)
 
-                if last_kept is not None and self.too_similar(last_kept, frame):
+                if self.blur_threshold > 0 and self._is_blurry(frame):
                     t += self.seconds_step
                     continue
+
+                if last_kept is not None:
+                    # Preprocess the new frame once; reuse cached gray for last_kept
+                    frame_gray = self._prep_similarity_gray(frame)
+                    diff = cv2.mean(cv2.absdiff(last_kept_gray, frame_gray))[0]
+                    if diff < self.similar_threshold:
+                        t += self.seconds_step
+                        continue
+                    last_kept_gray = frame_gray
+                else:
+                    last_kept_gray = self._prep_similarity_gray(frame)
 
                 frames.append(frame)
                 last_kept = frame

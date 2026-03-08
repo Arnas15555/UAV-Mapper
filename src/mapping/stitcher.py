@@ -14,40 +14,36 @@ _CUDA_AVAILABLE = cv2.cuda.getCudaEnabledDeviceCount() > 0
 
 class SimpleStitcher:
     """
-    Smarter stitcher:
-    - Downscale
-    - Compute ORB once per frame
-    - Filter low-feature frames
-    - Greedy frame selection using a balanced score:
-        score = inliers - motion_penalty
-      where motion_penalty prefers motion near a target (avoids "best overlap only")
-    - Overlap quality from homography RANSAC inliers
-    - Motion heuristic from median displacement of inlier correspondences (robust)
-    - KNN matching + Lowe ratio test (more robust than BF crossCheck)
-    - Cancel checks inside long loops
-    - CUDA-accelerated ORB, BFMatcher, and image resize when available
+    Stitches a sequence of UAV frames into a single panorama.
 
-    Key changes vs original:
-    - min_motion_px, target_motion_px, max_frames_for_stitch are now constructor
-      parameters so they can be tuned per-call from the UI / PipelineWorker
-      instead of being hard-coded.  The new defaults are friendlier to slow-moving
-      UAV footage.
+    Frame selection uses a greedy algorithm scored as:
+        score = inliers - motion_weight * abs(motion - target_motion_px)
+
+    This rewards good overlap while penalising motion that deviates from the
+    target, avoiding the failure mode of always picking the single most-overlapping
+    pair at the expense of spatial coverage.
+
+    Overlap quality comes from RANSAC homography inlier counts.
+    Motion is the median displacement of inlier correspondences (robust to outliers).
+    Matching uses KNN + Lowe ratio test rather than brute-force cross-check.
+
+    CUDA is used automatically when an NVIDIA GPU is available.
     """
 
     def __init__(
         self,
-        mode: str = "panorama",          # FIX default: panorama handles UAV parallax better
+        mode: str = "panorama",
         work_megapix: float = 2.0,
-        min_keypoints: int = 100,        # FIX default: was 250, too strict
-        orb_nfeatures: int = 4000,       # FIX default: more features → more robust matching
+        min_keypoints: int = 100,
+        orb_nfeatures: int = 4000,
         lookahead: int = 6,
-        min_inliers: int = 20,           # FIX default: was 30, relaxed slightly
-        min_motion_px: float = 3.0,      # FIX default: was 8.0 — now a constructor param
-        target_motion_px: float = 20.0,  # FIX default: was 40.0 — now a constructor param
+        min_inliers: int = 20,
+        min_motion_px: float = 3.0,
+        target_motion_px: float = 20.0,
         motion_weight: float = 0.35,
         ratio_thresh: float = 0.75,
         ransac_reproj_thresh: float = 4.0,
-        max_frames_for_stitch: int = 120,  # FIX default: was hard-coded 60
+        max_frames_for_stitch: int = 120,
         max_match_keep: int = 400,
     ):
         self.mode = mode.lower().strip()
@@ -72,6 +68,20 @@ class SimpleStitcher:
         else:
             self._orb = cv2.ORB_create(nfeatures=self.orb_nfeatures)
             self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+        # CLAHE instance reused across all frames (avoids repeated allocation)
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+    def _normalize_exposure(self, img: np.ndarray) -> np.ndarray:
+        """
+        Equalise per-frame exposure using CLAHE on the L channel of LAB colour space.
+        This reduces the visible seam lines caused by exposure differences between frames
+        without affecting hue or saturation.
+        """
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = self._clahe.apply(l)
+        return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
 
     @staticmethod
     def _downscale_to_megapix(img: np.ndarray, mp: float) -> np.ndarray:
@@ -270,19 +280,28 @@ class SimpleStitcher:
 
         cb(0.02, f"Preparing {len(frames)} frames... ({'CUDA' if _CUDA_AVAILABLE else 'CPU'})")
 
-        frames_small = [self._downscale_to_megapix(f, self.work_megapix) for f in frames]
-        cb(0.08, "Downscaled frames")
+        frames_small = [
+            self._normalize_exposure(self._downscale_to_megapix(f, self.work_megapix))
+            for f in frames
+        ]
+        cb(0.08, "Normalised exposure and downscaled frames")
 
         selected = self._select_frames(frames_small, on_progress=on_progress, cancel_check=cancel_check)
         if len(selected) < 2:
             raise RuntimeError("Frame selection produced <2 frames. Try different settings.")
 
-        # FIX: use PANORAMA mode for UAV footage — handles perspective/parallax properly
         stitch_mode = cv2.Stitcher_SCANS if self.mode == "scans" else cv2.Stitcher_PANORAMA
         stitcher = cv2.Stitcher_create(stitch_mode)
 
         try:
-            stitcher.setPanoConfidenceThresh(0.3)  # FIX: was 0.5 — relaxed to keep more frames
+            stitcher.setPanoConfidenceThresh(0.4)
+        except Exception:
+            pass
+
+        try:
+            # Multi-band blending produces smoother seams than the default feather blender,
+            # especially where frames have slight exposure differences after normalisation.
+            stitcher.setBlender(cv2.detail.MultiBandBlender())
         except Exception:
             pass
 

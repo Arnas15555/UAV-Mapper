@@ -70,15 +70,16 @@ class PipelineWorker(QThread):
         video_path: str,
         seconds_step: float,
         max_frames: int,
-        stitch_mode: str = "panorama",       # FIX: panorama mode suits UAV footage better
+        stitch_mode: str = "panorama",
         work_megapix: float = 2.0,
         min_keypoints: int = 100,
         orb_nfeatures: int = 4000,
         extract_megapix: float = 2.0,
         similar_threshold: float = 8.0,
-        min_motion_px: float = 3.0,          # FIX: was 8.0 — too strict for slow UAV
-        target_motion_px: float = 20.0,      # FIX: was 40.0 — more realistic for UAV
-        max_frames_for_stitch: int = 120,    # FIX: was hard-coded 60
+        blur_threshold: float = 0.0,
+        min_motion_px: float = 3.0,
+        target_motion_px: float = 20.0,
+        max_frames_for_stitch: int = 120,
     ):
         super().__init__()
         self.video_path        = str(video_path)
@@ -90,6 +91,7 @@ class PipelineWorker(QThread):
         self.orb_nfeatures     = int(orb_nfeatures)
         self.extract_megapix   = float(extract_megapix)
         self.similar_threshold = float(similar_threshold)
+        self.blur_threshold    = float(blur_threshold)
         self.min_motion_px     = float(min_motion_px)
         self.target_motion_px  = float(target_motion_px)
         self.max_frames_for_stitch = int(max_frames_for_stitch)
@@ -116,6 +118,7 @@ class PipelineWorker(QThread):
                 max_frames=self.max_frames,
                 extract_megapix=self.extract_megapix,
                 similar_threshold=self.similar_threshold,
+                blur_threshold=self.blur_threshold,
                 cancel_check=self._check_cancel,
             )
             frames = extractor.extract(on_progress=lambda p, m: cb(p * 0.45, m))
@@ -142,13 +145,12 @@ class PipelineWorker(QThread):
             cb(0.92, "Post-processing map...")
             pano = crop_black(pano)
 
-            # FIX: auto_rotate was defined in postprocess.py but never called.
-            # Corrects the ~45° tilt that accumulates from homography chaining.
+            # Correct the tilt that can accumulate from homography chaining
             cb(0.95, "Auto-rotating map...")
             pano = auto_rotate(pano)
 
             cb(0.97, "Cropping to content...")
-            pano = crop_largest_inner_rect(pano, shrink_iters=3)
+            pano = crop_largest_inner_rect(pano, shrink_iters=2)
 
             self._check_cancel()
             cb(1.0, "Done")

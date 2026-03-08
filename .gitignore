@@ -23,3 +23,6 @@ models/*.onnx
 dist/
 build/
 *.spec
+
+# Generated map output
+stitched_map*.png

@@ -2,17 +2,26 @@
 
 Stitch drone video footage into a single overhead map using OpenCV and PySide6.
 
+Features:
+- Frame extraction with duplicate filtering and optional blur rejection
+- ORB feature matching with greedy frame selection
+- Exposure normalisation (CLAHE) across frames before stitching
+- Multi-band blending for smooth seams
+- Auto-rotation and content cropping of the final map
+- CUDA acceleration on NVIDIA GPUs, with automatic CPU fallback
+- Interactive map viewer with zoom, pan, and marker placement
+
 ---
 
 ## Requirements
 
 - Python 3.10
-- NVIDIA GPU with CUDA support (recommended) or any machine with integrated graphics (CPU fallback)
 - Windows 10/11
+- NVIDIA GPU with CUDA support (recommended) **or** any CPU (integrated graphics works, just slower)
 
 ---
 
-## Setup — Standard (CPU / integrated graphics)
+## Setup — CPU / integrated graphics
 
 1. Create a Python 3.10 virtual environment:
    ```
@@ -22,7 +31,7 @@ Stitch drone video footage into a single overhead map using OpenCV and PySide6.
 
 2. Install dependencies:
    ```
-   pip install "numpy<2" PySide6 opencv-python==4.10.0.84
+   python -m pip install -r requirements.txt
    ```
 
 3. Run:
@@ -34,11 +43,11 @@ Stitch drone video footage into a single overhead map using OpenCV and PySide6.
 
 ## Setup — CUDA (NVIDIA GPU, recommended for best performance)
 
-This requires building OpenCV from source. Do this once on your CUDA-capable machine.
+This requires building OpenCV from source with CUDA support. Do this once on your CUDA-capable machine.
 
 ### Prerequisites
-- [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (13.x recommended)
-- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/) with "Desktop development with C++" workload
+- [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (12.x or newer)
+- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/) with the "Desktop development with C++" workload
 - [CMake](https://cmake.org/download/) added to system PATH
 - [Git](https://git-scm.com/)
 
@@ -58,12 +67,12 @@ This requires building OpenCV from source. Do this once on your CUDA-capable mac
    C:\Users\<you>\AppData\Local\Programs\Python\Python310\python.exe -m pip install "numpy<2"
    ```
 
-3. Run CMake (replace Python path with yours, CUDA_ARCH_BIN=7.5 is for RTX 2070 Super — check yours at https://developer.nvidia.com/cuda-gpus):
+3. Run CMake (replace the Python path and `CUDA_ARCH_BIN` with your GPU's compute capability — see table below):
    ```
-   cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=OFF -DOPENCV_DNN_CUDA=OFF "-DCUDA_ARCH_BIN=7.5" -DWITH_OPENCL=OFF -DOPENCV_EXTRA_MODULES_PATH="C:/opencv-build/opencv_contrib/modules" -DBUILD_opencv_python3=ON -DINSTALL_PYTHON_EXAMPLES=OFF -DBUILD_EXAMPLES=OFF -DPYTHON3_EXECUTABLE="C:/Users/<you>/AppData/Local/Programs/Python/Python310/python.exe" "C:/opencv-build/opencv"
+   cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=OFF -DOPENCV_DNN_CUDA=OFF -DCUDA_ARCH_BIN=7.5 -DWITH_OPENCL=OFF -DOPENCV_EXTRA_MODULES_PATH="C:/opencv-build/opencv_contrib/modules" -DBUILD_opencv_python3=ON -DINSTALL_PYTHON_EXAMPLES=OFF -DBUILD_EXAMPLES=OFF -DPYTHON3_EXECUTABLE="C:/Users/<you>/AppData/Local/Programs/Python/Python310/python.exe" "C:/opencv-build/opencv"
    ```
 
-4. Build (takes 1-3 hours):
+4. Build (takes 1–3 hours):
    ```
    cmake --build C:\opencv-build\build --config Release --parallel 8
    ```
@@ -78,14 +87,14 @@ This requires building OpenCV from source. Do this once on your CUDA-capable mac
    [System.Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";C:\opencv\x64\vc17\bin", "Machine")
    ```
 
-7. Copy the built `.pyd` into your venv:
+7. Remove the `opencv-python` line from `requirements.txt`, then install the rest:
    ```
-   copy C:\opencv-build\build\lib\python3\Release\cv2.cp310-win_amd64.pyd ".venv\Lib\site-packages\cv2\"
+   python -m pip install "numpy<2" PySide6
    ```
 
-8. Install remaining dependencies:
+8. Copy the built `.pyd` into your venv:
    ```
-   pip install "numpy<2" PySide6
+   copy C:\opencv-build\build\lib\python3\Release\cv2.cp310-win_amd64.pyd ".venv\Lib\site-packages\cv2\"
    ```
 
 9. Verify CUDA is working:
@@ -100,9 +109,12 @@ This requires building OpenCV from source. Do this once on your CUDA-capable mac
     ```
 
 ### CUDA compute capability by GPU
-- RTX 2070 Super: 7.5
-- RTX 3080: 8.6
-- RTX 4090: 8.9
+
+| GPU             | CUDA_ARCH_BIN |
+|-----------------|---------------|
+| RTX 2070 Super  | 7.5           |
+| RTX 3080        | 8.6           |
+| RTX 4090        | 8.9           |
 
 Check your GPU at: https://developer.nvidia.com/cuda-gpus
 
@@ -110,21 +122,50 @@ Check your GPU at: https://developer.nvidia.com/cuda-gpus
 
 ## Usage
 
-1. Click **Select Video** and choose a drone footage file (.mp4, .mov, .avi)
-2. Adjust parameters if needed (see recommended settings below)
+1. Click **Select Video** and choose a drone footage file (`.mp4`, `.mov`, `.avi`)
+2. Adjust parameters in the sidebar if needed
 3. Click **Generate Map**
-4. The stitched map is saved automatically as `stitched_map.png` in the working directory
-5. Use **Save As** to save to a custom location
+4. The stitched map saves automatically as `stitched_map.png` in the working directory
+5. Use **Save As** to save to a custom location or format
 
-### Recommended settings for 4K 25fps drone footage
+---
 
-| Parameter         | Value |
-|-------------------|-------|
-| Seconds step      | 0.25  |
-| Max frames        | 70    |
-| Extract MP        | 1.5   |
-| Similarity thr    | 12.0  |
-| Mode              | scans |
-| Work MP           | 1.2   |
-| Min keypoints     | 90    |
-| ORB features      | 5000  |
+## Parameters
+
+Default values are automatically chosen based on whether a CUDA GPU is detected.
+
+### Frame Extraction
+
+| Parameter       | GPU default | CPU default | Description |
+|-----------------|-------------|-------------|-------------|
+| Seconds step    | 0.33        | 0.5         | Time between sampled frames. Lower = denser sampling and better coverage. |
+| Max frames      | 120         | 60          | Hard cap on extracted frames. |
+| Extract MP      | 4.0         | 2.0         | Megapixels to downscale frames to at extraction time. |
+| Similarity thr  | 10.0        | 10.0        | Frames with a mean pixel difference below this are dropped as near-duplicates. |
+| Blur threshold  | 0 (off)     | 0 (off)     | Laplacian variance below this rejects a frame as too blurry. 0 disables the check. |
+
+### Stitching
+
+| Parameter       | GPU default | CPU default | Description |
+|-----------------|-------------|-------------|-------------|
+| Mode            | panorama    | panorama    | Spherical warp (panorama) handles UAV parallax better than flat-scan mode. |
+| Work MP         | 3.0         | 1.5         | Internal stitching resolution. Higher = sharper output but much slower on CPU. |
+| ORB features    | 8000        | 3000        | Keypoints detected per frame. More = more robust matching. |
+| Min keypoints   | 150         | 100         | Frames with fewer keypoints than this are discarded before stitching. |
+
+### Frame Selection
+
+| Parameter        | Default | Description |
+|------------------|---------|-------------|
+| Min motion px    | 5.0     | Frame pairs with less motion than this are rejected (avoids near-identical pairs). |
+| Target motion px | 25.0    | Ideal inter-frame motion. Pairs close to this value are scored higher. |
+| Max stitch frames | 80 / 40 | How many frames are passed to the final stitcher after selection. |
+
+---
+
+## Tips
+
+- **Stitching fails or produces few frames** — lower `Seconds step` to get more frames, or lower `Min motion px` if the drone was moving slowly.
+- **Output is blurry or has seams** — raise `Work MP` and `ORB features` if on GPU. Make sure lighting was consistent during the flight.
+- **Too slow on CPU** — lower `Work MP` to 1.0 and `ORB features` to 2000. Reduce `Max stitch frames` to 30.
+- **Blur threshold** — leave at 0 for typical drone footage which is naturally soft. Raise to 20–50 only if you have very sharp footage and want to filter out motion-blurred frames.

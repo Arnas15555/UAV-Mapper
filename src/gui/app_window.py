@@ -172,6 +172,16 @@ class AppWindow(QWidget):
             "Raise to keep more frames, lower to filter more aggressively."
         )
 
+        self.spin_blur_threshold = QDoubleSpinBox()
+        self.spin_blur_threshold.setRange(0.0, 500.0)
+        self.spin_blur_threshold.setSingleStep(5.0)
+        self.spin_blur_threshold.setDecimals(1)
+        self.spin_blur_threshold.setValue(DEFAULTS["blur_threshold"])
+        self.spin_blur_threshold.setToolTip(
+            "Frames with Laplacian variance below this are rejected as too blurry.\n"
+            "Raise to be stricter, lower to keep more frames. 0 = disabled."
+        )
+
         # ── Stitching params ─────────────────────────────────────────
         self.cmb_mode = QComboBox()
         self.cmb_mode.addItems(["panorama", "scans"])
@@ -366,6 +376,7 @@ class AppWindow(QWidget):
         f_extract.addRow("Max frames",     self.spin_max_frames)
         f_extract.addRow("Extract MP",     self.spin_extract_megapix)
         f_extract.addRow("Similarity thr", self.spin_similar_threshold)
+        f_extract.addRow("Blur threshold", self.spin_blur_threshold)
 
         f_stitch = _form()
         f_stitch.addRow("Mode",          self.cmb_mode)
@@ -437,7 +448,7 @@ class AppWindow(QWidget):
     def _all_param_widgets(self):
         return [
             self.cmb_mode, self.spin_seconds_step, self.spin_max_frames,
-            self.spin_extract_megapix, self.spin_similar_threshold,
+            self.spin_extract_megapix, self.spin_similar_threshold, self.spin_blur_threshold,
             self.spin_work_megapix, self.spin_min_keypoints, self.spin_orb_nfeatures,
             self.spin_min_motion, self.spin_target_motion, self.spin_max_stitch_frames,
         ]
@@ -458,6 +469,7 @@ class AppWindow(QWidget):
         self.spin_max_frames.setValue(DEFAULTS["max_frames"])
         self.spin_extract_megapix.setValue(DEFAULTS["extract_megapix"])
         self.spin_similar_threshold.setValue(DEFAULTS["similar_threshold"])
+        self.spin_blur_threshold.setValue(DEFAULTS["blur_threshold"])
         self.spin_work_megapix.setValue(DEFAULTS["work_megapix"])
         self.spin_min_keypoints.setValue(DEFAULTS["min_keypoints"])
         self.spin_orb_nfeatures.setValue(DEFAULTS["orb_nfeatures"])
@@ -507,6 +519,7 @@ class AppWindow(QWidget):
             orb_nfeatures=int(self.spin_orb_nfeatures.value()),
             extract_megapix=float(self.spin_extract_megapix.value()),
             similar_threshold=float(self.spin_similar_threshold.value()),
+            blur_threshold=float(self.spin_blur_threshold.value()),
             min_motion_px=float(self.spin_min_motion.value()),
             target_motion_px=float(self.spin_target_motion.value()),
             max_frames_for_stitch=int(self.spin_max_stitch_frames.value()),
