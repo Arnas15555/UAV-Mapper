@@ -1,6 +1,5 @@
-# opencv-python is only needed on machines WITHOUT a CUDA-capable GPU.
-# On CUDA machines, remove this line and copy the custom-built cv2.pyd into
-# your venv's site-packages instead (see the CUDA setup section in README.md).
+# On CUDA machines, remove opencv-python and copy the custom-built cv2.pyd into
+# your venv's site-packages instead (see CUDA setup in README.md).
 opencv-python==4.10.0.84
 
 numpy<2

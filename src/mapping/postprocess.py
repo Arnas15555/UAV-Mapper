@@ -9,9 +9,7 @@ _MIN_OUTPUT_DIM = 32
 
 
 def _valid_mask(pano_bgr: np.ndarray, thresh: int = 1) -> np.ndarray:
-    """
-    Binary mask of non-black pixels. Works even if pano is float/odd types.
-    """
+    """Returns a binary mask of non-black pixels, handling non-uint8 input."""
     if pano_bgr is None or pano_bgr.size == 0:
         raise ValueError("Empty image passed to postprocess")
 
@@ -26,10 +24,7 @@ def _valid_mask(pano_bgr: np.ndarray, thresh: int = 1) -> np.ndarray:
 
 
 def crop_black(pano_bgr: np.ndarray, thresh: int = 1) -> np.ndarray:
-    """
-    Crops to the bounding box of non-black pixels.
-    Safe against empty masks.
-    """
+    """Crops to the bounding box of non-black pixels."""
     mask = _valid_mask(pano_bgr, thresh=thresh)
     if cv2.countNonZero(mask) == 0:
         return pano_bgr

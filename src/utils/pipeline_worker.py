@@ -13,10 +13,7 @@ from mapping.postprocess import crop_black, crop_largest_inner_rect, auto_rotate
 
 
 def next_available_path(base_path: str) -> str:
-    """
-    Returns base_path if it doesn't exist, otherwise base_path with an
-    incrementing suffix:  stitched_map.png → stitched_map1.png → stitched_map2.png
-    """
+    """Returns base_path if it doesn't exist, otherwise appends an incrementing number (e.g. map1.png, map2.png)."""
     if not os.path.exists(base_path):
         return base_path
 
@@ -33,10 +30,7 @@ def next_available_path(base_path: str) -> str:
 
 
 class SaveWorker(QThread):
-    """
-    Saves a numpy array (BGR image) to disk on a background thread so the
-    main thread — and therefore the UI — is not blocked by a large imwrite.
-    """
+    """Saves a BGR image to disk on a background thread to keep the UI responsive."""
 
     save_ok  = Signal(str)   # path that was written
     save_err = Signal(str)   # error message

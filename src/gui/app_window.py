@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QFileDialog, QProgressBar, QMessageBox, QCheckBox, QLineEdit,
+    QFileDialog, QProgressBar, QMessageBox,
     QComboBox, QDoubleSpinBox, QSpinBox, QFormLayout, QGroupBox,
     QScrollArea, QFrame, QSizePolicy, QSpacerItem,
 )
@@ -114,24 +114,16 @@ class AppWindow(QWidget):
 
     def _build_widgets(self):
         # Toolbar buttons
-        self.btn_select = QPushButton("📂  Select Video")
-        self.btn_run    = QPushButton("▶  Generate Map")
-        self.btn_cancel = QPushButton("✕  Cancel")
-        self.btn_fit    = QPushButton("⊡  Fit to View")
-        self.btn_save   = QPushButton("💾  Save As…")
+        self.btn_select = QPushButton("Select Video")
+        self.btn_run    = QPushButton("Generate Map")
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_fit    = QPushButton("Fit to View")
+        self.btn_save   = QPushButton("Save As…")
 
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(False)
         self.btn_fit.setEnabled(False)
         self.btn_save.setEnabled(False)
-
-        # Marker controls
-        self.chk_markers = QCheckBox("Place markers")
-        self.chk_markers.setEnabled(False)
-        self.marker_label = QLineEdit()
-        self.marker_label.setPlaceholderText("Marker label…")
-        self.marker_label.setEnabled(False)
-        self.marker_label.setFixedWidth(130)
 
         # Status + progress
         self.status = QLabel("Select a video to begin.")
@@ -334,7 +326,7 @@ class AppWindow(QWidget):
 
     def _build_layout(self):
         # ── Toolbar ──────────────────────────────────────────────────
-        logo = QLabel("✈  UAV Mapper")
+        logo = QLabel("UAV Mapper")
         logo.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_ACCENT}; letter-spacing: 1px;")
 
         sep = QFrame()
@@ -352,9 +344,6 @@ class AppWindow(QWidget):
         toolbar_row.addSpacing(6)
         toolbar_row.addWidget(self.btn_fit)
         toolbar_row.addWidget(self.btn_save)
-        toolbar_row.addSpacing(6)
-        toolbar_row.addWidget(self.chk_markers)
-        toolbar_row.addWidget(self.marker_label)
         toolbar_row.addStretch(1)
         toolbar_row.addWidget(self.status)
         toolbar_row.addWidget(self.progress)
@@ -438,8 +427,7 @@ class AppWindow(QWidget):
         self.btn_fit.clicked.connect(self.viewer.fit_to_view)
         self.btn_save.clicked.connect(self.save_as)
         self.btn_reset.clicked.connect(self._reset_defaults)
-        self.chk_markers.toggled.connect(self.viewer.set_place_markers)
-        self.viewer.marker_added.connect(self.on_marker_added)
+
 
     # ------------------------------------------------------------------
     # Helpers
@@ -460,8 +448,6 @@ class AppWindow(QWidget):
     def _set_post_run_controls(self, enabled: bool):
         self.btn_fit.setEnabled(enabled)
         self.btn_save.setEnabled(enabled and self._last_pano is not None)
-        self.chk_markers.setEnabled(enabled)
-        self.marker_label.setEnabled(enabled)
 
     def _reset_defaults(self):
         self.cmb_mode.setCurrentText(DEFAULTS["stitch_mode"])
@@ -590,11 +576,3 @@ class AppWindow(QWidget):
         self._save_worker.save_err.connect(self._on_save_err)
         self._save_worker.start()
 
-    def on_marker_added(self, x: float, y: float):
-        label = self.marker_label.text().strip()
-        self.viewer.add_marker(x, y, label=label)
-        if label:
-            self.status.setText(f"📍 '{label}' at ({x:.0f}, {y:.0f})")
-        else:
-            self.status.setText(f"📍 Marker at ({x:.0f}, {y:.0f})")
-        self.marker_label.clear()

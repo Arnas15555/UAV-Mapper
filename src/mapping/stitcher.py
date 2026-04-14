@@ -16,18 +16,9 @@ class SimpleStitcher:
     """
     Stitches a sequence of UAV frames into a single panorama.
 
-    Frame selection uses a greedy algorithm scored as:
-        score = inliers - motion_weight * abs(motion - target_motion_px)
-
-    This rewards good overlap while penalising motion that deviates from the
-    target, avoiding the failure mode of always picking the single most-overlapping
-    pair at the expense of spatial coverage.
-
-    Overlap quality comes from RANSAC homography inlier counts.
-    Motion is the median displacement of inlier correspondences (robust to outliers).
-    Matching uses KNN + Lowe ratio test rather than brute-force cross-check.
-
-    CUDA is used automatically when an NVIDIA GPU is available.
+    Frame selection uses a greedy algorithm that scores candidate pairs by RANSAC
+    inlier count minus a penalty for motion deviating from the target. This balances
+    overlap quality against spatial coverage. CUDA is used automatically when available.
     """
 
     def __init__(
@@ -73,11 +64,7 @@ class SimpleStitcher:
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
     def _normalize_exposure(self, img: np.ndarray) -> np.ndarray:
-        """
-        Equalise per-frame exposure using CLAHE on the L channel of LAB colour space.
-        This reduces the visible seam lines caused by exposure differences between frames
-        without affecting hue or saturation.
-        """
+        """Equalise per-frame exposure via CLAHE on the L channel (LAB). Reduces seam lines without affecting colour."""
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
         l = self._clahe.apply(l)
@@ -253,7 +240,6 @@ class SimpleStitcher:
 
             if best is None:
                 cur_pos += 1
-                # FIX: only append if index is valid, avoid duplicates
                 next_idx = usable[cur_pos]
                 if next_idx not in selected_idxs:
                     selected_idxs.append(next_idx)
@@ -299,8 +285,7 @@ class SimpleStitcher:
             pass
 
         try:
-            # Multi-band blending produces smoother seams than the default feather blender,
-            # especially where frames have slight exposure differences after normalisation.
+            # Multi-band blending produces smoother seams than the default feather blender.
             stitcher.setBlender(cv2.detail.MultiBandBlender())
         except Exception:
             pass

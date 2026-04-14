@@ -56,10 +56,7 @@ class VideoExtractor:
         return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _is_blurry(self, frame_bgr: np.ndarray) -> bool:
-        """
-        Rejects frames where the Laplacian variance falls below blur_threshold.
-        Low variance means few strong edges — a reliable indicator of motion blur.
-        """
+        """Returns True if the frame's Laplacian variance is below blur_threshold (indicator of motion blur)."""
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < self.blur_threshold
 
@@ -71,10 +68,7 @@ class VideoExtractor:
         return g
 
     def too_similar(self, a_bgr: np.ndarray, b_bgr: np.ndarray) -> bool:
-        """
-        Cheap similarity metric: mean absolute difference on resized grayscale.
-        Blur reduces sensitivity to noise/compression artifacts.
-        """
+        """Returns True if the mean absolute pixel difference (on small grayscale thumbnails) is below the threshold."""
         a = self._prep_similarity_gray(a_bgr)
         b = self._prep_similarity_gray(b_bgr)
         diff = cv2.mean(cv2.absdiff(a, b))[0]
